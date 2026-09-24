@@ -1,0 +1,61 @@
+[package]
+name         = "speaklab-server"
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.75"
+description  = "SpeakLab 的可选后端：练习记录同步与本地语音识别"
+license      = "MIT"
+publish      = false
+
+[dependencies]
+# Web 框架与运行时
+axum = { version = "0.7", features = ["macros", "multipart", "ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "process", "time", "sync"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "limit", "compression-gzip"] }
+hyper = "1"
+
+# 云游戏串流：后端直接跟浏览器说 CDP，不经过 Playwright。
+# tokio-tungstenite 的版本要跟 axum 的 ws 依赖对齐（0.24），
+# 否则会同时编进两份，白白多一个依赖。
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+# 只用来问浏览器的调试端口开了没，不需要 rustls 那一套
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 可观测性
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 错误处理
+thiserror = "1"
+anyhow = "1"
+
+# 其他
+tokio-rusqlite = "0.5"
+
+[dependencies.rusqlite]
+version = "0.31"
+# bundled 会把 SQLite 源码一起编进来，产出一个不依赖系统
+# sqlite3.dll 的可执行文件。自部署场景下这比省几 MB 重要得多。
+features = ["bundled"]
+
+[features]
+default = []
+# 本地语音识别。需要 cmake 和 C++ 编译器，并且会拉取 whisper.cpp。
+# 没装工具链时保持关闭，服务照常运行，相关接口返回 501。
+whisper = ["dep:whisper-rs"]
+
+[dependencies.whisper-rs]
+version  = "0.12"
+optional = true
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = true
+panic         = "abort"

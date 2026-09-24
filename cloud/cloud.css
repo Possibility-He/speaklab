@@ -1,0 +1,228 @@
+/* ============================================================
+   云游戏卡片 — 样式
+   ------------------------------------------------------------
+   和后端 server/src/cloud/ 配套。画面是后端用无头浏览器
+   跑出来的 JPEG 帧，通过 WebSocket 推过来，这里只负责显示
+   和把鼠标/触摸/键盘事件发回去。
+
+   整张卡片不放文字（跟小恐龙卡片一个规矩）：
+   没打开时是一张海报 + 一个 ▶ 角标，连上以后海报被画面盖住。
+
+   选择器用属性前缀 [id^="cloudCard"] 而不是列 id：
+   加卡时不用回来改样式。例外是云·鸣潮那张，见下面。
+
+   ------------------------------------------------------------
+   排布：两张横的 + 两张竖的
+
+   首页是三列网格（列宽 296px，间距 16px）：
+
+     第2行  小恐龙(竖 1列×405) + 云原神(横 跨2列×405)
+     第3行  云崩铁(横 跨2列×405) + 云·鸣潮(竖 1列×405)
+
+   横的跨两列（608px 宽）——296px 里玩云游戏点不准。
+   竖的只占一列，高度**不写死**，靠 align-self:stretch 跟同行那张
+   横卡拉平。这样换视口宽度也不用回来改数字。
+
+   为什么不写死高度：横卡按 3:2 算出来的高度是随列宽变的
+   （1440 视口下 405px，820 视口下 336px），写死一个数总有一个
+   宽度对不上，同行两张就会一高一矮。
+
+   两张竖卡里，横着的画面（480x320）居中显示，上下露出的部分：
+   鸣潮露出海报（压暗），恐龙露出卡片底色。
+   ============================================================ */
+
+/* 卡片本体 */
+[id^="cloudCard"]{
+  position:relative;
+  overflow:hidden;
+  padding:0;                  /* 画面顶满，连内边距都不要 */
+  display:block;
+  cursor:pointer;
+  background:#0d1117;         /* 画面没到之前先给个底色，避免白闪 */
+
+  /* 3:2 —— 跟后端画面（480x320）完全一致。
+     对上了之后，海报、画面、点击坐标三者不会互相错位。 */
+  aspect-ratio:3 / 2;
+
+  /* 横卡：跨两列。.entry-grid 是 repeat(auto-fit, minmax(240px, 1fr))，
+     宽屏 3 列，普通卡 296px。跨两列后 608px，画面大得多。
+     窄屏只有一列时跨两列会溢出，见下面的媒体查询。 */
+  grid-column:span 2;
+
+  /* 横卡自己定行高，所以别被拉高 */
+  align-self:start;
+}
+
+/* 云·鸣潮：竖卡，不跨列。
+   ------------------------------------------------------------
+   1) grid-column:auto —— 前两张横卡各占两列，每行都会空出第三列，
+      那就是首页上原来那块空白。这张占一列正好补上。
+   2) aspect-ratio:auto + align-self:stretch —— 高度交给同行那张
+      跨两列的横卡决定（405px），自己不写死。
+   id 选择器优先级高于上面的属性选择器，能盖住 span 2。 */
+#cloudCardMC{
+  grid-column:auto;
+  aspect-ratio:auto;
+  align-self:stretch;
+}
+
+/* 小恐龙也是竖卡：跟同行的云原神一样高。
+   ------------------------------------------------------------
+   它自然高度只有 98px（一个游戏区那么高），同一行的云游戏卡是
+   405px，不拉平就空出一大块，就是首页上那个显眼的缺口。
+
+   拉高之后游戏本身不会跟着变大——dino.js 的 fit() 用的是
+   min(sw/inW, sh/inH) 做 contain，宽度先到顶，所以画面还是
+   296x74。为了让它在 405px 高的卡里不贴在底边，fit() 里加了
+   垂直居中（transform-origin 改成 left top，再算 top 偏移）。
+
+   这条规则放在这里而不是 dino.css：起因是云游戏卡变高了，
+   恐龙卡自己没问题，dino.css 不该知道云游戏的存在。 */
+#dinoCard{align-self:stretch}
+
+/* 海报。没打开时给用户看的东西，不然卡片是一块黑。
+   绝对定位铺满卡片，画面（下面的 .cloud-screen）盖在它上面。 */
+[id^="cloudCard"] .cloud-poster{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;           /* 按卡片比例裁剪铺满 */
+  object-position:center;
+  display:block;
+  pointer-events:none;
+  transition:opacity .3s ease;
+}
+/* 竖卡的海报是拿横图裁的（原图 16:9，卡片约 3:4），
+   裁掉两侧一大半，默认居中构图不一定好看，往上偏一点保住主体 */
+#cloudCardMC .cloud-poster{object-position:center 35%}
+
+/* 画面。后端给的是 480x320。
+   ------------------------------------------------------------
+   绝对定位 + 垂直居中，不是放在文档流里。原因：竖卡（296x405）
+   比画面（3:2）高得多，放文档流里画面会贴在顶边，上下留白不均。
+   居中之后，上下露出来的部分在竖卡里露出海报、在横卡里不露
+   （横卡 3:2 正好等于画面比例，画面铺满）。
+
+   同比例时不拉伸：卡片比例跟画面不一致时宁可留空也不要变形，
+   否则云游戏里的按钮位置会跟实际点击坐标对不上。
+   cloud.js 的 norm() 换算坐标时也是按「画面在卡片里居中」算的，
+   所以这里的居中和它对得上。 */
+[id^="cloudCard"] .cloud-screen{
+  position:absolute;
+  left:0;
+  right:0;
+  top:50%;
+  transform:translateY(-50%);
+  width:100%;
+  height:auto;
+  object-fit:contain;
+  object-position:center;
+  pointer-events:none;        /* 事件统一挂卡片上，这里不抢 */
+}
+
+/* ▶ 角标。卡片上不能写字，所以用个图形告诉用户"这里能点"。
+   只在没连上的时候出现。 */
+[id^="cloudCard"] .cloud-play{
+  position:absolute;
+  left:50%; top:50%;
+  width:46px; height:46px;
+  margin:-23px 0 0 -23px;
+  border-radius:50%;
+  background:rgba(13,17,23,.55);
+  border:1px solid rgba(255,255,255,.38);
+  backdrop-filter:blur(2px);
+  pointer-events:none;
+  transition:opacity .25s ease, transform .25s ease;
+  z-index:1;
+}
+/* 三角形用 border 画，不用字符——省得字体不同长得不一样 */
+[id^="cloudCard"] .cloud-play::after{
+  content:'';
+  position:absolute;
+  left:50%; top:50%;
+  width:0; height:0;
+  margin:-7px 0 0 -5px;       /* 三角形重心偏左，往右挪半个像素级修正 */
+  border-style:solid;
+  border-width:7px 0 7px 12px;
+  border-color:transparent transparent transparent #fff;
+}
+
+/* 出画面之后 ▶ 让位 */
+[id^="cloudCard"].cloud-live .cloud-play{opacity:0}
+
+/* 海报：横卡里画面铺满，海报留着也看不见，直接藏掉。
+   竖卡里画面是横的，上下会露出卡片，所以海报**留着**，
+   但压暗一点，免得跟画面抢注意力。 */
+[id^="cloudCard"].cloud-live .cloud-poster{opacity:0}
+#cloudCardMC.cloud-live .cloud-poster{opacity:.32}
+
+/* 悬停时 ▶ 稍微大一点，给点反馈 */
+[id^="cloudCard"]:hover .cloud-play{transform:scale(1.08)}
+
+/* 连接中 / 出错时的提示。平时隐藏。 */
+[id^="cloudCard"] .cloud-status{
+  position:absolute;
+  left:0; right:0; bottom:0;
+  padding:6px 10px;
+  font-size:12px;
+  line-height:1.35;
+  color:#c9d1d9;
+  background:linear-gradient(transparent, rgba(13,17,23,.85));
+  opacity:0;
+  transition:opacity .25s ease;
+  pointer-events:none;
+  text-align:center;
+  z-index:2;                  /* 压在画面/海报之上 */
+}
+[id^="cloudCard"].cloud-msg .cloud-status{opacity:1}
+
+/* 会话活着的时候别显示任何覆盖层 */
+[id^="cloudCard"].cloud-live .cloud-status{opacity:0}
+
+/* 键盘焦点要看得见——不然没法用键盘操作 */
+[id^="cloudCard"]:focus-visible{
+  outline:2px solid var(--green-2, #4ade80);
+  outline-offset:2px;
+}
+
+/* 悬停反馈 */
+[id^="cloudCard"]:hover{border-color:var(--green-2)}
+
+/* 云游戏卡片所在的行要按内容定高。
+   ------------------------------------------------------------
+   .entry-grid 是 grid-auto-rows:1fr —— 同一行所有格子等高。
+   云游戏卡片按 3:2 撑开后有 400 多 px，普通入口卡只有 200 左右；
+   两者同行时 1fr 会把普通卡片一起拉高，画面还会溢出压到下一行。
+
+   用 :has() 只把「含云游戏卡片」的那个网格改成 auto 行高，
+   普通网格不受影响。Edge/Chrome 105+ 都支持 :has()，
+   这项目本来就要求新浏览器（pointer 事件、aspect-ratio、WebSocket）。 */
+.entry-grid:has(> [id^="cloudCard"]){grid-auto-rows:auto}
+
+/* 网格掉到两列（实测视口 800 上下）之后，鸣潮卡会单独占一行，
+   没有同行的横卡给它定高，aspect-ratio:auto 会让它塌成
+   min-height 那么一条，所以这里自己给个比例。
+   恐龙卡不用管：它跟普通入口卡同行，拉平到 200 左右正合适。 */
+@media (max-width:800px){
+  #cloudCardMC{aspect-ratio:3 / 2}
+}
+
+/* 窄屏只有一列，跨两列会溢出。 */
+@media (max-width:720px){
+  [id^="cloudCard"]{grid-column:auto}
+  #cloudCardMC{grid-column:auto; aspect-ratio:3 / 2}
+}
+
+/* 海报还没加载出来的时候别让卡片塌成一条线 */
+[id^="cloudCard"]{min-height:150px}
+@media (max-width:720px){
+  [id^="cloudCard"]{min-height:120px}
+}
+
+/* 尊重"减少动效"偏好：状态提示和角标不做过渡 */
+@media (prefers-reduced-motion:reduce){
+  [id^="cloudCard"] .cloud-status,
+  [id^="cloudCard"] .cloud-play,
+  [id^="cloudCard"] .cloud-poster{transition:none}
+}
