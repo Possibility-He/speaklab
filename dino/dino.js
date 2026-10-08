@@ -2767,8 +2767,9 @@
    完整许可见 dino/LICENSE。
 
    与上游的差异（也见 dino/README.md）：
-     1) 上游在 DOMContentLoaded 时自动 new Runner，本站改为进入视口
-        后才创建，且未点击时以「托管控件」自动跑，作为可点的提示；
+     1) 上游在 DOMContentLoaded 时自动 new Runner 并立刻开局；本站改为
+        进入视口后才创建，且只摆一副**静止**画面，不自动开局——
+        点击卡片（或回车 / 空格）才开始；
      2) Runner 是单例，重复创建会复用已销毁的 DOM，故停止时清 instance_；
      3) init() 无条件 querySelector('.icon-offline').style，缺元素会抛
         TypeError，故在卡片里放一个隐藏占位元素；
@@ -2779,7 +2780,8 @@
 const DinoCard = {
   runner:null,
   active:false,          // 是否已把操作权交给用户
-  io:null,               // IntersectionObserver：进入视口才启动演示
+  muted:false,           // 恐龙音效开关（独立于网站的「界面音效」）
+  io:null,               // IntersectionObserver：进视口只摆静止画面
   ro:null,               // ResizeObserver：游戏区尺寸变化就重算缩放
   idleTimer:0,
   bound:false,
@@ -2801,6 +2803,7 @@ const DinoCard = {
       if(!this.active || this.runner !== runner) return;
       const t = e.target;
       if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if(t && t.closest && t.closest('.dino-mute')) return;   // 焦点在音效按钮上时不操作恐龙
       const k = e.key;
       if(k === ' ' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'Spacebar'){
         e.preventDefault();
@@ -2843,22 +2846,48 @@ const DinoCard = {
       }
     });
 
-    // 只在卡片可见时跑演示，滚出视口就停，别白烧 CPU
+    /* 独立音效开关。只影响恐龙自己的三个音效（见 create() 里对 playSound
+       的包装），不碰网站的 FX 与朗读；状态存 localStorage。 */
+    try{ this.muted = localStorage.getItem('dino.muted') === '1'; }catch(e){}
+    const muteBtn = host.querySelector('.dino-mute');
+    if(muteBtn){
+      const syncMute = () => {
+        muteBtn.textContent = this.muted ? '🔇' : '🔊';
+        muteBtn.setAttribute('aria-pressed', this.muted ? 'true' : 'false');
+        muteBtn.setAttribute('aria-label',
+          this.muted ? '恐龙音效：关（点击开启）' : '恐龙音效：开（点击静音）');
+        host.classList.toggle('dino-muted', this.muted);
+      };
+      muteBtn.addEventListener('click', e => {
+        // 别让卡片把这次点击当成「接管 / 交还」
+        e.preventDefault();
+        e.stopPropagation();
+        this.muted = !this.muted;
+        try{ localStorage.setItem('dino.muted', this.muted ? '1' : '0'); }catch(e){}
+        syncMute();
+      });
+      // 焦点在按钮上按空格/回车 = 切换静音，不该让恐龙起跳
+      muteBtn.addEventListener('keydown', e => e.stopPropagation());
+      syncMute();
+    }
+
+    // 进入视口只把游戏建出来摆一副静止画面（不自动开局），
+    // 滚出视口就停掉，别白烧 CPU。开局完全交给用户。
     if('IntersectionObserver' in window){
       this.io = new IntersectionObserver(entries => {
         for(const en of entries){
-          if(en.isIntersecting){ if(!this.active) this.startDemo(); }
+          if(en.isIntersecting){ if(!this.active) this.idle(); }
           else if(!this.active){ this.stop(); }
         }
       }, { threshold:0.35 });
       this.io.observe(host);
     } else {
-      this.startDemo();
+      this.idle();
     }
 
     document.addEventListener('visibilitychange', () => {
       if(document.hidden){ this.stop(); }
-      else if(!this.active && this.isVisible()) this.startDemo();
+      else if(!this.active && this.isVisible()) this.idle();
     });
   },
 
@@ -2869,38 +2898,11 @@ const DinoCard = {
     return r.top < window.innerHeight && r.bottom > 0 && r.height > 0;
   },
 
-  /* 演示模式：托管控件替你玩——看见障碍就跳，撞了就重开 */
-  startDemo(){
+  /* 待机：只把游戏建出来摆一副静止画面（Runner.init 里会画一帧），
+     不按空格、不开托管——所以画面不会自己动，等用户点击/空格开局。 */
+  idle(){
     if(this.runner || this.active) return;
-    if(!this.create()) return;
-    this.press(' ');            // 先起跳开局，之后由 tick 接管
-    this.tick();
-  },
-
-  /* 托管循环：比 setTimeout 猜时机更靠谱，直接看游戏里的障碍物 */
-  tick(){
-    clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => {
-      if(this.active || !this.runner){ return; }
-      const r = this.runner;
-      try{
-        if(r.crashed){
-          // 撞了就重开，让演示一直有东西看
-          this.press(' ');
-        } else {
-          const obs = r.horizon && r.horizon.obstacles && r.horizon.obstacles[0];
-          if(obs && r.tRex && !r.tRex.jumping){
-            // 障碍物进入起跳距离就跳
-            const gap = obs.xPos - r.tRex.xPos;
-            const need = 60 + r.currentSpeed * 9;
-            if(gap > 0 && gap < need) this.press(' ');
-          } else if(!r.playing){
-            this.press(' ');   // 还没开始（例如刚被清过）就开局
-          }
-        }
-      }catch(e){}
-      this.tick();
-    }, 80);
+    this.create();
   },
 
   /* 停止监听游戏区尺寸 */
@@ -2927,6 +2929,17 @@ const DinoCard = {
         if(R && R.prototype){
           R.prototype.setArcadeMode = function(){};
           R.prototype.setArcadeModeContainerScale = function(){};
+          /* 音效出口只有 playSound 一处（跳跃/得分/撞毁都走它），
+             在这里判断静音开关最省事。Runner 是单例、卡片会重建，
+             所以只包一次。 */
+          if(!R.prototype.__speaklabSoundPatched){
+            R.prototype.__speaklabSoundPatched = true;
+            const origPlaySound = R.prototype.playSound;
+            R.prototype.playSound = function(soundBuffer){
+              if(DinoCard.muted) return;
+              return origPlaySound.call(this, soundBuffer);
+            };
+          }
         }
       }catch(e){}
       if(this.runner.containerEl){
@@ -2962,14 +2975,14 @@ const DinoCard = {
     this.fit();
   },
 
-  /* 交还：停止操作，回到演示由托管接手 */
+  /* 交还：停止操作。画面留在原地（撞了就停在 GAME OVER），不再自动重开。 */
   release(){
     if(!this.active) return;
     this.active = false;
+    clearTimeout(this.idleTimer);
     this.detachKeys();
     const host = this.host();
     if(host) host.classList.remove('dino-active');
-    this.tick();
   },
 
   /* 合成一次按键，用于托管自动跳和开局。

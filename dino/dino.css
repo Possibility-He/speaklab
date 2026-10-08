@@ -58,6 +58,21 @@
 /* 悬停与激活时的边框反馈 */
 #dinoCard:hover{border-color:var(--green-2)}
 #dinoCard.dino-active{border-color:var(--green-2);box-shadow:var(--shadow)}
+/* 音效开关：平时不抢画面，悬停/聚焦才露出来；静音时常驻，状态一眼可见 */
+#dinoCard .dino-mute{
+  position:absolute; top:6px; right:6px; z-index:4;
+  width:26px; height:26px; padding:0;
+  display:grid; place-items:center;
+  font-size:13px; line-height:1;
+  border:1px solid var(--line,#dcdcdc); border-radius:8px;
+  background:rgba(255,255,255,.8); color:inherit;
+  cursor:pointer; opacity:0; transition:opacity .15s ease;
+}
+#dinoCard:hover .dino-mute,
+#dinoCard:focus-within .dino-mute,
+#dinoCard .dino-mute[aria-pressed="true"]{opacity:1}
+#dinoCard .dino-mute:hover{border-color:var(--green-2)}
+#dinoCard .dino-mute:focus-visible{outline:2px solid var(--green-2);outline-offset:1px}
 
 /* 游戏加载失败时的兜底提示 */
 #dinoCard.dino-broken::after{
