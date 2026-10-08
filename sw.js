@@ -16,7 +16,7 @@
  * 从缓存拿能省掉每次首屏的几百毫秒。
  */
 
-const VERSION = 'v1';
+const VERSION = 'v4';
 const CACHE = 'speaklab-' + VERSION;
 
 // 首屏必需的东西。这里列全，装完就能直接离线打开。
@@ -24,11 +24,6 @@ const PRECACHE = [
   './',
   './index.html',
   './manifest.json',
-  './cloud/cloud.css',
-  './cloud/cloud.js',
-  './cloud/posters/genshin.webp',
-  './cloud/posters/starrail.webp',
-  './cloud/posters/mingchao.jpg',
   './dino/dino.css',
   './dino/dino.js',
   './dino/offline-sprite-1x.png',
