@@ -63,7 +63,14 @@ mod imp {
         Ok(ctx)
     }
 
-    pub async fn transcribe(state: &AppState, audio: &[u8], language: &str) -> AppResult<Transcript> {
+    /// `prompt` 是目标句（跟读场景已知），会作为 whisper 的 initial_prompt；
+    /// 传 None 表示没有先验文本，按纯识别走。
+    pub async fn transcribe(
+        state: &AppState,
+        audio: &[u8],
+        language: &str,
+        prompt: Option<&str>,
+    ) -> AppResult<Transcript> {
         let Some(model_path) = state.config().asr.model_path.clone() else {
             return Err(AppError::NotImplemented("whisper 模型（未设置 SPEAKLAB_ASR_MODEL）".into()));
         };
@@ -74,6 +81,9 @@ mod imp {
         // spawn_blocking 的闭包要求 'static，所以先把 &str 转成 String
         let lang = language.to_owned();
         let lang_for_task = lang.clone();
+        let prompt_for_task = prompt
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty());
 
         // whisper 是同步的 CPU 活，扔到阻塞线程池，别占着 tokio 的 worker
         let text = tokio::task::spawn_blocking(move || -> AppResult<String> {
@@ -88,9 +98,15 @@ mod imp {
             params.set_print_progress(false);
             params.set_print_realtime(false);
             params.set_print_timestamps(false);
-            // 单线程推理，并发靠上面的信号量控制，比让每个请求
-            // 各开一堆线程互相抢 CPU 要稳定
-            params.set_n_threads(4);
+            /* 线程数按本机核数算，别写死：原来固定 4，在 32 线程的机器上
+               白白慢一倍以上（并发上限由上面的信号量控制，这里按它来分核）。 */
+            params.set_n_threads(asr_threads());
+
+            /* 目标句当 initial_prompt。跟读的目标句是已知的，喂进去之后
+               短句、专有词、同音词的识别明显更准，也少出现"半句幻觉"。 */
+            if let Some(p) = prompt_for_task.as_deref() {
+                params.set_initial_prompt(p);
+            }
 
             whisper_state
                 .full(params, &samples)
@@ -151,7 +167,7 @@ mod imp {
 
         // 再重采样到 16k。线性插值对语音够用，且不用引入重采样库。
         if sample_rate == 16_000 {
-            return Ok(mono);
+            return Ok(trim_silence(mono));
         }
         if sample_rate == 0 {
             return Err(AppError::BadRequest("WAV 头里的采样率为 0".into()));
@@ -168,7 +184,54 @@ mod imp {
             let b = mono.get(idx + 1).copied().unwrap_or(a);
             out.push(a + (b - a) * frac);
         }
-        Ok(out)
+        Ok(trim_silence(out))
+    }
+
+    /// 掐掉首尾静音。whisper 对静音既慢又爱"编内容"（幻觉），
+    /// 而跟读录音几乎总带着开头/结尾的一段静音。
+    fn trim_silence(samples: Vec<f32>) -> Vec<f32> {
+        const WIN: usize = 320; // 20ms @16k
+        const PAD: usize = WIN * 6; // 前后各留 120ms，别切掉起音
+        if samples.len() < WIN * 4 {
+            return samples;
+        }
+        let energy = |i: usize| -> f32 {
+            let s = i * WIN;
+            let e = (s + WIN).min(samples.len());
+            (samples[s..e].iter().map(|v| v * v).sum::<f32>() / (e - s) as f32).sqrt()
+        };
+        let wins = samples.len() / WIN;
+        let peak = (0..wins).map(energy).fold(0.0f32, f32::max);
+        if peak <= 0.0 {
+            return samples;
+        }
+        // 相对峰值 + 绝对下限：既避开底噪，也不会把轻声开头当静音
+        let thr = (peak * 0.06).max(0.004);
+        let (Some(first), Some(last)) = (
+            (0..wins).find(|&i| energy(i) >= thr),
+            (0..wins).rev().find(|&i| energy(i) >= thr),
+        ) else {
+            return samples; // 整段都在门限以下：交给 whisper 自己判断
+        };
+        let start = (first * WIN).saturating_sub(PAD);
+        let end = ((last + 1) * WIN + PAD).min(samples.len());
+        if end <= start {
+            return samples;
+        }
+        samples[start..end].to_vec()
+    }
+
+    /// 每次识别用几个线程：逻辑核数 ÷ 并发上限，夹在 [2, 16]。
+    fn asr_threads() -> i32 {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let concurrency = std::env::var("SPEAKLAB_ASR_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(2);
+        (cores / concurrency).clamp(2, 16) as i32
     }
 
     /// 极简 WAV 解析：找 `fmt ` 和 `data` 两个块，返回需要的字段。

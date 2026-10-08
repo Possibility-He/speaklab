@@ -186,6 +186,8 @@ pub async fn transcribe(
     // 也能给出"收到了多少字节"这种有用的报错。
     let mut audio: Option<Vec<u8>> = None;
     let mut language: Option<String> = None;
+    // 目标句（可选）：跟读场景传过来当 initial_prompt，能提准
+    let mut target: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -202,6 +204,9 @@ pub async fn transcribe(
             }
             Some("language") => {
                 language = field.text().await.ok();
+            }
+            Some("target") => {
+                target = field.text().await.ok();
             }
             _ => {} // 未知字段直接忽略，向前兼容
         }
@@ -230,13 +235,14 @@ pub async fn transcribe(
     let started = std::time::Instant::now();
 
     #[cfg(feature = "whisper")]
-    let result = crate::asr::transcribe(&state, &audio, &lang).await;
+    let result = crate::asr::transcribe(&state, &audio, &lang, target.as_deref()).await;
 
     #[cfg(not(feature = "whisper"))]
     let result: AppResult<crate::asr::Transcript> = {
         // 走不到这里：上面 enabled() 已经挡掉了没开 feature 的情况。
         // 留着是为了让两种编译配置下的类型保持一致。
         let _ = &lang;
+        let _ = &target;
         Err(AppError::NotImplemented(
             "本地语音识别（编译时未打开 whisper feature）".into(),
         ))
