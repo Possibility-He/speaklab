@@ -17,3 +17,9 @@
 # 云游戏的浏览器配置目录。**这个必须忽略**：里面存着登录 cookie，
 # 提交上去等于把账号凭证发到仓库里。
 cloud-profiles/
+
+# 已退役的 Node 版服务端留下的依赖与缓存（server.js 时代，约 600MB）。
+# 新版是 Rust，用不到这些；留着本地就好，别入库。
+node_modules/
+.npm-cache/
+.cache/
