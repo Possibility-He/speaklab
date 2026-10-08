@@ -713,8 +713,6 @@ main{position:relative;z-index:1}
 </style>
 <!-- 小恐龙卡片（T-Rex Runner）的样式，BSD-3-Clause，见 dino/README.md -->
 <link rel="stylesheet" href="dino/dino.css">
-<!-- 云游戏卡片。后端 server/src/cloud/ 的配套前端，见 cloud/cloud.js -->
-<link rel="stylesheet" href="cloud/cloud.css">
 </head>
 <body>
 <header class="topbar">
@@ -781,34 +779,10 @@ main{position:relative;z-index:1}
           <div class="icon icon-offline" aria-hidden="true"></div>
           <div class="interstitial-wrapper"></div>
         </div>
-      </div>
-      <!-- 云游戏卡片。后端没有 cloud_games 能力时 CloudCard.init() 会把它们藏起来。
-           卡片上不放文字标签（跟小恐龙一个规矩）：没打开时看到的是一张海报
-           加一个 ▶ 角标，连上以后海报被画面盖住。
-           排布见 cloud.css：前两张跨两列，云·鸣潮只占一列，
-           正好填进前两张跨列之后留下的那个空位（三列网格，296px 一列）。
-           没有云异环——那个入口（yh.wanmei.com/cloud/）实测是 514，
-           它是《异环》官网不是云游戏，做了就是个点了报错的死链。 -->
-      <div class="entry" id="cloudCard" role="button" tabindex="0"
-           aria-label="云·原神：点一下在卡片里玩" hidden>
-        <img class="cloud-poster" src="cloud/posters/genshin.webp" alt="" aria-hidden="true">
-        <img class="cloud-screen" alt="" aria-hidden="true">
-        <span class="cloud-play" aria-hidden="true"></span>
-        <div class="cloud-status" role="status" aria-live="polite"></div>
-      </div>
-      <div class="entry" id="cloudCardStar" role="button" tabindex="0"
-           aria-label="云·星穹铁道：点一下在卡片里玩" hidden>
-        <img class="cloud-poster" src="cloud/posters/starrail.webp" alt="" aria-hidden="true">
-        <img class="cloud-screen" alt="" aria-hidden="true">
-        <span class="cloud-play" aria-hidden="true"></span>
-        <div class="cloud-status" role="status" aria-live="polite"></div>
-      </div>
-      <div class="entry" id="cloudCardMC" role="button" tabindex="0"
-           aria-label="云·鸣潮：点一下在卡片里玩" hidden>
-        <img class="cloud-poster" src="cloud/posters/mingchao.jpg" alt="" aria-hidden="true">
-        <img class="cloud-screen" alt="" aria-hidden="true">
-        <span class="cloud-play" aria-hidden="true"></span>
-        <div class="cloud-status" role="status" aria-live="polite"></div>
+        <!-- 独立音效开关：只静音恐龙自己的三个音效（跳跃/得分/撞毁），
+             与设置里的「界面音效」互不影响。状态记在 localStorage。 -->
+        <button class="dino-mute" id="dinoMute" type="button"
+                aria-label="恐龙音效：开（点击静音）" aria-pressed="false">🔊</button>
       </div>
     </div>
 
@@ -1120,8 +1094,6 @@ main{position:relative;z-index:1}
 <!-- 小恐龙卡片（T-Rex Runner）。必须在下面的主脚本之前加载：
      init() 会同步调用 DinoCard.init()。BSD-3-Clause，见 dino/README.md -->
 <script src="dino/dino.js"></script>
-<!-- 云游戏卡片。同样要在主脚本之前加载：init() 里会调 CloudCard.init() -->
-<script src="cloud/cloud.js"></script>
 <script>
 'use strict';
 /* ============================================================
@@ -1353,22 +1325,31 @@ const ASR_ERR_TEXT = {
 };
 const ASR = {
   rec:null, started:false, stopFlag:false, restarts:0,
-  final:'', interim:'', conf:null, cb:null,
+  final:'', interim:'', conf:null, cb:null, alts:[],
   start(cb){
     if(!asrSupported){ cb.onError('unsupported'); return; }
-    this.cb=cb; this.final=''; this.interim=''; this.conf=null;
+    this.cb=cb; this.final=''; this.interim=''; this.conf=null; this.alts=[];
     this.started=true; this.stopFlag=false; this.restarts=0;
     this.open();
   },
   open(){
     let r;
     try{ r=new SR(); }catch(e){ this.cb && this.cb.onError('unsupported'); return; }
-    r.lang='en-US'; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
+    /* maxAlternatives=3：识别常把相近音听成别的词，多留两个候选，
+       跟读时再挑"最像目标句"的那条（见 bestFor），能少判错。 */
+    r.lang='en-US'; r.continuous=true; r.interimResults=true; r.maxAlternatives=3;
     r.onresult = e=>{
       let interim='';
       for(let i=e.resultIndex;i<e.results.length;i++){
         const res=e.results[i];
-        if(res.isFinal){ this.final += res[0].transcript + ' '; if(res[0].confidence!=null) this.conf=res[0].confidence; }
+        if(res.isFinal){
+          this.final += res[0].transcript + ' ';
+          if(res[0].confidence!=null) this.conf=res[0].confidence;
+          for(let k=0;k<res.length;k++){
+            const alt=(res[k] && res[k].transcript || '').trim();
+            if(alt && this.alts.indexOf(alt)<0) this.alts.push(alt);
+          }
+        }
         else interim += res[0].transcript;
       }
       this.interim=interim;
@@ -1388,6 +1369,18 @@ const ASR = {
     r.onend = ()=>{ if(this.started && !this.stopFlag){ this.tryRestart(); } };
     this.rec=r;
     try{ r.start(); }catch(e){ this.cb && this.cb.onError('startfail'); }
+  },
+  /* 目标句已知时（跟读），从候选里挑词面最贴近的一条。
+     simSentence 是词级 LCS，已有实现，不另造轮子。 */
+  bestFor(target){
+    if(!target || typeof simSentence!=='function') return this.final;
+    const cands=(this.alts && this.alts.length ? this.alts : [this.final]).filter(Boolean);
+    let best=this.final, bestSim=-1;
+    for(const c of cands){
+      const s=simSentence(target,c);
+      if(s>bestSim){ bestSim=s; best=c; }
+    }
+    return best || this.final;
   },
   tryRestart(){ setTimeout(()=>{ if(this.started && !this.stopFlag && this.rec){ try{ this.rec.start(); }catch(e){} } }, 350); },
   stop(){
@@ -1472,7 +1465,11 @@ const Recorder = {
     const blocked = (typeof micBlockedReason==='function') ? micBlockedReason() : '';
     if(blocked){ toast(blocked, 6000); throw new Error(blocked); }
     try{
-      this.stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      this.stream = await navigator.mediaDevices.getUserMedia({audio:{
+        // 笔记本内置麦克风下这三项对识别准确率影响很大
+        noiseSuppression:true, echoCancellation:true, autoGainControl:true,
+        channelCount:1
+      }});
     }catch(err){
       const name = err && err.name || '';
       let hint = '拿不到麦克风权限';
@@ -2492,7 +2489,7 @@ const ShadowApp = {
     $('#stageStatus').classList.remove('hidden');
     this.setStatus('ANALYZING · 分析中…');
     ASR.stop();
-    const transcript=(ASR.final||'').trim();
+    const transcript=(ASR.bestFor(this.cur().en)||ASR.final||'').trim();
     let r=null;
     try{ r=await Recorder.stop(); }catch(e){ r={blob:null,durMs:0,silMs:0}; }
     FX.recStop();
@@ -3719,7 +3716,11 @@ const Ticker = {
     if(this.running) return;
     this.setMsg('请求麦克风…');
     try{
-      this.stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      this.stream = await navigator.mediaDevices.getUserMedia({audio:{
+        // 笔记本内置麦克风下这三项对识别准确率影响很大
+        noiseSuppression:true, echoCancellation:true, autoGainControl:true,
+        channelCount:1
+      }});
     }catch(e){
       const map = {
         NotAllowedError:'麦克风被拒绝',
@@ -4054,9 +4055,6 @@ init();
    探测到就记下来，各模块按需取用；没探测到就什么都不发生。 */
 Backend.probe().then(ok => {
   if(ok) console.info('[backend] 已连接 ' + Backend.base, Backend.caps);
-  /* 云游戏卡片要等探测结果出来才知道后端在不在、有没有这能力，
-     所以放在这里而不是 init() 里。没后端时 init() 会把卡片藏起来。 */
-  try{ if(typeof CloudCard!=='undefined') CloudCard.init(); }catch(e){ console.warn('[cloud] 初始化失败', e); }
 });
 
 /* Service worker：让页面能离线打开、能「添加到主屏幕」。
